@@ -1,11 +1,39 @@
 package service
 
 import (
-	"github.com/gofiber/fiber/v2"
+	"crypto/rsa"
+	"fmt"
+	"github.com/gofiber/fiber/v2/log"
 	"github.com/golang-jwt/jwt/v5"
 	"io/ioutil"
 	"time"
 )
+
+var (
+	privateKey *rsa.PrivateKey
+	publicKey  *rsa.PublicKey
+)
+
+func init() {
+	privateKeyBytes, err := ioutil.ReadFile("private.pem")
+	if err != nil {
+		log.Fatalf("Error reading private key file: %v", err)
+	}
+	privateKey, err = jwt.ParseRSAPrivateKeyFromPEM(privateKeyBytes)
+	if err != nil {
+		log.Fatalf("Error parsing private key: %v", err)
+	}
+
+	// Load public key
+	publicKeyBytes, err := ioutil.ReadFile("public.pem")
+	if err != nil {
+		log.Fatalf("Error reading public key file: %v", err)
+	}
+	publicKey, err = jwt.ParseRSAPublicKeyFromPEM(publicKeyBytes)
+	if err != nil {
+		log.Fatalf("Error parsing public key: %v", err)
+	}
+}
 
 type UserClaims struct {
 	Name  string `json:"name"`
@@ -27,39 +55,30 @@ func CreateToken(name, email, phone, role string) (string, error) {
 		},
 	}
 
-	privateKey, err := ioutil.ReadFile("private.pem")
-	if err != nil {
-		panic("Unable to read private key: " + err.Error())
-	}
+	token := jwt.NewWithClaims(jwt.SigningMethodRS256, claims)
+	tokenString, err := token.SignedString(privateKey)
 
-	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
-	signedToken, err := token.SignedString(privateKey)
 	if err != nil {
 		return "", err
 	}
 
-	return signedToken, nil
+	return tokenString, nil
 }
 
 func ValidateToken(tokenString string) error {
-	if len(tokenString) > 7 && tokenString[:7] == "Bearer " {
-		tokenString = tokenString[7:]
-	}
-
-	publicKey, err := ioutil.ReadFile("public.pem")
-	if err != nil {
-		panic("Unable to read private key: " + err.Error())
-	}
-
 	token, err := jwt.Parse(tokenString, func(token *jwt.Token) (interface{}, error) {
 		if _, ok := token.Method.(*jwt.SigningMethodRSA); !ok {
-			return nil, jwt.ErrSignatureInvalid
+			return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
 		}
 		return publicKey, nil
 	})
-	
-	if err != nil || !token.Valid {
-		return fiber.NewError(fiber.StatusUnauthorized, "Invalid token")
+
+	if err != nil {
+		return err
+	}
+
+	if _, ok := token.Claims.(jwt.MapClaims); ok && !token.Valid {
+		log.Fatalf("Invalid token")
 	}
 
 	return nil
